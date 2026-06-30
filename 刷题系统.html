@@ -201,23 +201,21 @@ function render() {
     const ans = escHtml(q.answer);
     const opts = q.options || [];
 
+    const isMulti = ans.length > 1;
     let bodyHtml = '';
     if (opts.length > 0) {
-      // Use dedicated options field
       bodyHtml = opts.map(o => {
         const letter = o.charAt(0).toUpperCase();
-        const isCorrect = ans && (letter === ans);
+        const isCorrect = ans && (isMulti ? ans.includes(letter) : letter === ans);
         return `<div class="review-opt${isCorrect?' correct':''}">${escHtml(o)}</div>`;
       }).join('\n');
-      // Question text (without options embedded)
       bodyHtml = escHtml(q.question) + '\n' + bodyHtml;
     } else {
-      // Fallback: extract options from question text
       let bodyLines = q.question.split('\n');
       bodyHtml = bodyLines.map(l => {
         const tr = l.trim();
         if (/^[A-D][、．\.\)]/.test(tr)) {
-          const isCorrect = ans && (tr[0] === ans[0]);
+          const isCorrect = ans && (isMulti ? ans.includes(tr[0]) : tr[0] === ans[0]);
           return `<div class="review-opt${isCorrect?' correct':''}">${escHtml(l)}</div>`;
         }
         return escHtml(l);
@@ -256,7 +254,7 @@ function startExam() {
   const kw = document.getElementById('search').value.trim().toLowerCase();
   let qs = DATA[curSub]||[];
   if (curType !== 'all') qs = qs.filter(q => q.type === curType);
-  qs = qs.filter(q => q.exam !== false); // Only exam-eligible questions
+  qs = qs.filter(q => q.exam !== false);
   if (kw) qs = qs.filter(q => q.question.toLowerCase().includes(kw) || q.answer.toLowerCase().includes(kw));
   filtered = qs;
   examIdx = 0;
@@ -266,6 +264,7 @@ function startExam() {
   document.getElementById('stats').textContent = `共 ${filtered.length} 题`;
   renderExam();
 }
+function isMultiChoice(q) { return q.type === '选择题' && q.answer && q.answer.length > 1; }
 
 function renderExam() {
   const el = document.getElementById('contentArea');
@@ -286,16 +285,18 @@ function renderExam() {
   let optHtml = '';
   let feedbackHtml = '';
 
+  const isMulti = isMultiChoice(q);
   if (q.type === '选择题') {
     const opts = q.options && q.options.length > 0 ? parseStructuredOptions(q.options) : extractOptions(q.question);
     optHtml = opts.map(o => {
       let cls = 'exam-opt';
-      if (!isRevealed && userChoice === o.key) cls += ' selected';
+      const isSelected = isMulti ? userChoice.includes(o.key) : userChoice === o.key;
+      if (!isRevealed && isSelected) cls += ' selected';
       if (isRevealed) {
         cls += ' disabled';
-        if (o.key === correctAns) cls += ' correct-answer';
-        if (userChoice === o.key && userChoice !== correctAns) cls += ' wrong';
-        if (userChoice === o.key && userChoice === correctAns) cls += ' correct';
+        if (correctAns.includes(o.key)) cls += ' correct-answer';
+        if (isSelected && !correctAns.includes(o.key)) cls += ' wrong';
+        if (isSelected && correctAns.includes(o.key)) cls += ' correct';
       }
       return `<div class="${cls}" onclick="examSelect('${o.key}')"><strong>${o.key}.</strong> ${escHtml(o.text)}</div>`;
     }).join('');
@@ -316,7 +317,8 @@ function renderExam() {
   }
 
   if (isRevealed) {
-    const isCorrect = userChoice === correctAns;
+    function sortStr(s) { return s.split('').sort().join(''); }
+    const isCorrect = isMulti ? sortStr(userChoice) === sortStr(correctAns) : userChoice === correctAns;
     const fbClass = isCorrect ? 'correct' : 'wrong';
     const fbText = isCorrect
       ? '回答正确！'
@@ -349,19 +351,36 @@ function renderExam() {
   </div>`;
 }
 
-function examSelect(key) { if (examRevealed[examIdx]) return; examAnswers[examIdx] = key; renderExam(); }
-function examReveal() { if (!examAnswers[examIdx]) return; examRevealed[examIdx] = true; renderExam(); }
+function examSelect(key) {
+  if (examRevealed[examIdx]) return;
+  const q = filtered[examIdx];
+  if (isMultiChoice(q)) {
+    let cur = examAnswers[examIdx] || '';
+    if (cur.includes(key)) cur = cur.replace(key, '');
+    else cur = (cur + key).split('').sort().join('');
+    examAnswers[examIdx] = cur;
+  } else {
+    examAnswers[examIdx] = key;
+  }
+  renderExam();
+}
+function examReveal() {
+  if (!examAnswers[examIdx]) return;
+  examRevealed[examIdx] = true;
+  renderExam();
+}
 function examNext() { if (examIdx < filtered.length-1) { examIdx++; renderExam(); } }
 function examPrev() { if (examIdx > 0) { examIdx--; renderExam(); } }
 function examFinish() { examFinished = true; renderExam(); }
 
 function renderExamResult() {
+  function sortStr(s) { return s.split('').sort().join(''); }
   const total = filtered.length;
   let correct = 0, wrong = 0, unanswered = 0;
   filtered.forEach((q, i) => {
     const ua = examAnswers[i]||'', ca = q.answer||'';
     if (!ua) unanswered++;
-    else if (ua===ca) correct++;
+    else if (ca.length > 1 ? sortStr(ua) === sortStr(ca) : ua === ca) correct++;
     else wrong++;
   });
   const pct = total>0 ? Math.round(correct/total*100) : 0;
